@@ -1,15 +1,12 @@
-Excellent. ✅ PDF Loader is now working.
+Perfect. ✅ DOCX Loader is verified.
 
-The output confirms that the scanner successfully processed:
+Your screenshot confirms:
 
-app1.txt
-app2.txt
-sample.txt
-sample.pdf
+Loaded 5 documents
 
-and extracted actual PDF text. So the abstract-class issue is resolved.
+and the DOCX was successfully extracted into the common Document structure. The existing TXT and PDF loaders continue to work as well.
 
-Current Phase 1 status
+Phase 1 ingestion progress
 
 Project Skeleton       ✅
 Document Model         ✅
@@ -18,82 +15,103 @@ TXT Loader             ✅
 Loader Factory         ✅
 Knowledge Scanner      ✅
 PDF Loader             ✅
+DOCX Loader            ✅
 
-DOCX Loader            ⬜
-Excel Loader           ⬜
+Excel Loader           ⬜  ← Next
 Mixed-file ingestion   🟨
 Chunking               ⬜
-Embeddings             ⬜
-ChromaDB                ⬜
-Retrieval               ⬜
-RAG                     ⬜
-Chatbot                 ⬜
+Embedding              ⬜
+ChromaDB               ⬜
+Retrieval              ⬜
+RAG                    ⬜
+Chatbot                ⬜
 
-One important observation: your PDF is clearly a real enterprise/SOP-type document, and pypdf is already extracting its text successfully. That's a good sign for the actual Phase 1 use case.
+Increment 6 — Excel Loader
+
+This one is particularly important for our actual Phase 1 because your enterprise knowledge will contain things like:
+
+Application inventory
+
+Cluster inventory
+
+Database inventory
+
+Environment mappings
+
+Infrastructure inventory
 
 
----
-
-Increment 5 — DOCX Loader
-
-Now we'll add Word documents.
+These will likely be Excel spreadsheets.
 
 Goal
 
-Support:
+Implement:
 
-.docx → DocxLoader → Document
+.xlsx
+  ↓
+ExcelLoader
+  ↓
+Document
 
-using the python-docx package that is already part of our offline SDK dependencies.
-
-Brief reason
-
-SOPs, operational procedures, architecture notes, and internal documentation can commonly exist as Word documents. We want them entering the same normalized Document pipeline as TXT and PDF.
+For the first version, we'll preserve the sheet name in metadata and convert the spreadsheet rows into text.
 
 
 ---
 
-1. Create
+1. Create excel_loader.py
+
+Create:
 
 app/
 └── loaders/
-    └── docx_loader.py
+    └── excel_loader.py
 
-Put this in it:
+Use:
 
 from pathlib import Path
 
-from docx import Document as DocxDocument
+import pandas as pd
 
 from app.loaders.base_loader import BaseLoader
 from app.models.document import Document
 
 
-class DocxLoader(BaseLoader):
+class ExcelLoader(BaseLoader):
     """
-    Loader for DOCX documents.
+    Loader for Excel (.xlsx) documents.
     """
 
     def load(self, file_path: Path) -> Document:
 
-        doc = DocxDocument(file_path)
+        sheets = pd.read_excel(
+            file_path,
+            sheet_name=None
+        )
 
-        paragraphs = []
+        sections = []
 
-        for paragraph in doc.paragraphs:
-            text = paragraph.text.strip()
+        for sheet_name, dataframe in sheets.items():
 
-            if text:
-                paragraphs.append(text)
+            dataframe = dataframe.fillna("")
 
-        content = "\n".join(paragraphs)
+            sections.append(
+                f"Sheet: {sheet_name}\n"
+            )
+
+            sections.append(
+                dataframe.to_string(index=False)
+            )
+
+            sections.append("\n")
+
+        content = "\n".join(sections)
 
         return Document(
             source=file_path.name,
-            file_type="docx",
+            file_type="xlsx",
             content=content,
             metadata={
-                "paragraphs": str(len(paragraphs))
+                "sheets": str(len(sheets))
             }
         )
 
@@ -104,48 +122,45 @@ class DocxLoader(BaseLoader):
 
 Add:
 
-from app.loaders.docx_loader import DocxLoader
+from app.loaders.excel_loader import ExcelLoader
 
-Then add:
+and:
 
-if extension == ".docx":
-    return DocxLoader()
+if extension == ".xlsx":
+    return ExcelLoader()
 
-So your factory should now handle:
+Your factory now supports:
 
-.txt
-.pdf
-.docx
+.txt   → TxtLoader
+.pdf   → PdfLoader
+.docx  → DocxLoader
+.xlsx  → ExcelLoader
 
 
 ---
 
-3. Create a sample DOCX
+3. Create a sample Excel file
 
 Create:
 
-knowledge/sample.docx
+knowledge/sample.xlsx
 
-You can make it in Microsoft Word with:
+For example:
 
-Enterprise AI SDK
+Application	Namespace	Cluster	Environment
 
-Application: Payment API
+Payment API	payment-prod	VKS-PR-01	Production
+Customer API	customer-prod	VKS-PR-02	Production
 
-Namespace: payment-prod
 
-Cluster: VKS-PR-01
-
-Environment: Production
-
-Save it under knowledge.
+You can create this using Excel itself.
 
 
 ---
 
 4. Run the existing scanner
 
-No scanner modification is required.
+We don't change KnowledgeScanner.
 
 Run:
 
@@ -153,40 +168,63 @@ python -m scripts.test_scanner
 
 Expected:
 
-Loaded 5 documents
+Loaded 6 documents
 
-and you should see:
+You should see something similar to:
 
-sample.docx
-docx
+sample.xlsx
+xlsx
 
-Enterprise AI SDK
-Application: Payment API
-Namespace: payment-prod
-Cluster: VKS-PR-01
-Environment: Production
+Sheet: Sheet1
+
+Application    Namespace       Cluster      Environment
+Payment API    payment-prod    VKS-PR-01    Production
+Customer API   customer-prod   VKS-PR-02    Production
 
 
 ---
 
-Important
+Important observation
 
-Don't modify KnowledgeScanner.
+At this point we'll have completed the first version of the entire document ingestion layer:
 
-That's the benefit of the architecture we've created:
+Knowledge/
+                     │
+          ┌──────────┼──────────┐
+          ▼          ▼          ▼
+         TXT        PDF        DOCX
+          │          │          │
+          └──────────┼──────────┘
+                     ▼
+                 XLSX
+                     │
+                     ▼
+              Loader Factory
+                     │
+                     ▼
+             Document Objects
 
-┌── TxtLoader
-                 │
-Knowledge ───────┼── PdfLoader
-                 │
-                 └── DocxLoader
-                       ▲
-                       │
-                 LoaderFactory
-                       ▲
-                       │
-                 KnowledgeScanner
+Once Excel passes, don't add more loaders yet.
 
-We're simply plugging another loader into the existing pipeline.
+We'll do one important checkpoint:
 
-Implement DOCX and run the same scanner. Once you get the expected output, we'll move to the Excel loader, which is particularly important for your actual SBI inventories.
+Ingestion Layer Validation
+
+We'll test that:
+
+all four formats load;
+
+unsupported files are ignored;
+
+nested directories work;
+
+metadata is preserved;
+
+malformed files don't crash the entire scan;
+
+the scanner produces a clean collection of Document objects.
+
+
+Then we'll move to the next major subsystem: Chunking.
+
+That is where the raw documents become suitable for embeddings and eventually ChromaDB.
