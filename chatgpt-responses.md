@@ -1,214 +1,192 @@
-Excellent. This is another successful milestone. The scanner is correctly discovering all files recursively, selecting the appropriate loader through the factory, and returning normalized Document objects.
+Excellent. ✅ PDF Loader is now working.
 
-We're no longer building isolated classes—we're building a working ingestion pipeline.
+The output confirms that the scanner successfully processed:
 
-Progress
+app1.txt
+app2.txt
+sample.txt
+sample.pdf
 
-✅ Project Skeleton
-✅ Document Model
-✅ Base Loader
-✅ TXT Loader
-✅ Loader Factory
-✅ Knowledge Scanner
+and extracted actual PDF text. So the abstract-class issue is resolved.
 
-⬜ PDF Loader
-⬜ DOCX Loader
-⬜ Excel Loader
-⬜ Chunking Engine
-⬜ Embedding Service
-⬜ ChromaDB
-⬜ Retrieval
-⬜ RAG
-⬜ Enterprise Chatbot
+Current Phase 1 status
+
+Project Skeleton       ✅
+Document Model         ✅
+Base Loader            ✅
+TXT Loader             ✅
+Loader Factory         ✅
+Knowledge Scanner      ✅
+PDF Loader             ✅
+
+DOCX Loader            ⬜
+Excel Loader           ⬜
+Mixed-file ingestion   🟨
+Chunking               ⬜
+Embeddings             ⬜
+ChromaDB                ⬜
+Retrieval               ⬜
+RAG                     ⬜
+Chatbot                 ⬜
+
+One important observation: your PDF is clearly a real enterprise/SOP-type document, and pypdf is already extracting its text successfully. That's a good sign for the actual Phase 1 use case.
 
 
 ---
 
-Next Increment: PDF Loader
+Increment 5 — DOCX Loader
 
-Now we'll start supporting real enterprise documentation.
+Now we'll add Word documents.
 
 Goal
 
-Load PDFs (Runbooks, SOPs, Architecture Docs) into the same Document object.
+Support:
 
-This is probably the most common document type you'll have in SBI.
+.docx → DocxLoader → Document
+
+using the python-docx package that is already part of our offline SDK dependencies.
+
+Brief reason
+
+SOPs, operational procedures, architecture notes, and internal documentation can commonly exist as Word documents. We want them entering the same normalized Document pipeline as TXT and PDF.
 
 
 ---
 
-Step 1
-
-Create
+1. Create
 
 app/
-    loaders/
-        pdf_loader.py
+└── loaders/
+    └── docx_loader.py
 
-
----
-
-Step 2
-
-Paste
+Put this in it:
 
 from pathlib import Path
 
-from pypdf import PdfReader
+from docx import Document as DocxDocument
 
 from app.loaders.base_loader import BaseLoader
 from app.models.document import Document
 
 
-class PdfLoader(BaseLoader):
+class DocxLoader(BaseLoader):
     """
-    Loader for PDF documents.
+    Loader for DOCX documents.
     """
 
     def load(self, file_path: Path) -> Document:
 
-        reader = PdfReader(file_path)
+        doc = DocxDocument(file_path)
 
-        text = ""
+        paragraphs = []
 
-        for page in reader.pages:
-            page_text = page.extract_text()
+        for paragraph in doc.paragraphs:
+            text = paragraph.text.strip()
 
-            if page_text:
-                text += page_text + "\n"
+            if text:
+                paragraphs.append(text)
+
+        content = "\n".join(paragraphs)
 
         return Document(
             source=file_path.name,
-            file_type="pdf",
-            content=text,
+            file_type="docx",
+            content=content,
             metadata={
-                "pages": str(len(reader.pages))
+                "paragraphs": str(len(paragraphs))
             }
         )
 
 
 ---
 
-Step 3
-
-Update loader_factory.py
-
-Currently you have:
-
-if extension == ".txt":
-    return TxtLoader()
+2. Update loader_factory.py
 
 Add:
 
-from app.loaders.pdf_loader import PdfLoader
+from app.loaders.docx_loader import DocxLoader
 
-and
+Then add:
 
-if extension == ".pdf":
-    return PdfLoader()
+if extension == ".docx":
+    return DocxLoader()
 
+So your factory should now handle:
 
----
-
-Step 4
-
-Place any simple PDF inside
-
-knowledge/
-
-It doesn't matter what it contains.
-
-For example
-
-knowledge/
-
-sample.pdf
+.txt
+.pdf
+.docx
 
 
 ---
 
-Step 5
+3. Create a sample DOCX
 
-Run
+Create:
+
+knowledge/sample.docx
+
+You can make it in Microsoft Word with:
+
+Enterprise AI SDK
+
+Application: Payment API
+
+Namespace: payment-prod
+
+Cluster: VKS-PR-01
+
+Environment: Production
+
+Save it under knowledge.
+
+
+---
+
+4. Run the existing scanner
+
+No scanner modification is required.
+
+Run:
 
 python -m scripts.test_scanner
 
+Expected:
 
----
+Loaded 5 documents
 
-Expected Output
+and you should see:
 
-Now you should see something like
+sample.docx
+docx
 
-Loaded 4 documents
-
-sample.txt
-
-...
-
-sample.pdf
-
-...
-
-pages : 5
-
-The scanner should automatically detect the PDF without modifying the scanner code.
+Enterprise AI SDK
+Application: Payment API
+Namespace: payment-prod
+Cluster: VKS-PR-01
+Environment: Production
 
 
 ---
 
-Why this is an important milestone
+Important
 
-Notice what just happened:
+Don't modify KnowledgeScanner.
 
-Previously:
+That's the benefit of the architecture we've created:
 
-Knowledge Folder
+┌── TxtLoader
+                 │
+Knowledge ───────┼── PdfLoader
+                 │
+                 └── DocxLoader
+                       ▲
+                       │
+                 LoaderFactory
+                       ▲
+                       │
+                 KnowledgeScanner
 
-↓
+We're simply plugging another loader into the existing pipeline.
 
-TXT only
-
-Now:
-
-Knowledge Folder
-
-↓
-
-TXT
-
-↓
-
-PDF
-
-↓
-
-Same Document Object
-
-The scanner doesn't know or care whether it's loading TXT or PDF.
-
-That's exactly how we want to build the system.
-
-
----
-
-A small architectural suggestion
-
-Before moving to DOCX and Excel, I'd like to make one enhancement.
-
-Currently, PdfLoader returns the entire PDF as one large string.
-
-That works for testing, but it's not ideal for RAG.
-
-After we verify the PDF loader, I'd like to slightly redesign the Document metadata to preserve information such as:
-
-Number of pages
-
-Author (if available)
-
-Title (if available)
-
-Creation date (if available)
-
-
-This metadata will become very useful later when searching, filtering, and citing enterprise documents, and it's easier to add now before we start indexing hundreds of files.
+Implement DOCX and run the same scanner. Once you get the expected output, we'll move to the Excel loader, which is particularly important for your actual SBI inventories.
