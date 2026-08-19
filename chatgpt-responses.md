@@ -1,230 +1,217 @@
-Perfect. ✅ DOCX Loader is verified.
+Perfect. ✅ Excel Loader is verified.
 
-Your screenshot confirms:
+Your screenshot shows the Excel file being detected and converted into a Document, including the sheet name and tabular content. So our complete initial ingestion layer is now working.
 
-Loaded 5 documents
+Phase 1 — Current Status
 
-and the DOCX was successfully extracted into the common Document structure. The existing TXT and PDF loaders continue to work as well.
+Project Skeleton        ✅
+Document Model          ✅
+Base Loader             ✅
+TXT Loader              ✅
+PDF Loader              ✅
+DOCX Loader             ✅
+Excel Loader            ✅
+Loader Factory          ✅
+Knowledge Scanner       ✅
 
-Phase 1 ingestion progress
+--------------------------------
+DOCUMENT INGESTION COMPLETE
+--------------------------------
 
-Project Skeleton       ✅
-Document Model         ✅
-Base Loader            ✅
-TXT Loader             ✅
-Loader Factory         ✅
-Knowledge Scanner      ✅
-PDF Loader             ✅
-DOCX Loader            ✅
+Chunking Engine         ⬜  ← NEXT
+Embedding Service       ⬜
+ChromaDB                ⬜
+Retrieval               ⬜
+RAG Prompt              ⬜
+Qwen Integration        ⬜
+Enterprise Chatbot      ⬜
+FastAPI                 ⬜
 
-Excel Loader           ⬜  ← Next
-Mixed-file ingestion   🟨
-Chunking               ⬜
-Embedding              ⬜
-ChromaDB               ⬜
-Retrieval              ⬜
-RAG                    ⬜
-Chatbot                ⬜
+We have now reached an important architectural boundary:
 
-Increment 6 — Excel Loader
+RAW KNOWLEDGE
+                      │
+                      ▼
+              ┌───────────────┐
+              │     Scanner   │
+              └───────┬───────┘
+                      │
+                      ▼
+              ┌───────────────┐
+              │ Loader Factory│
+              └───────┬───────┘
+                      │
+        ┌─────────────┼─────────────┐
+        ▼             ▼             ▼
+       TXT           PDF           DOCX
+                                     
+                      XLSX
+                       │
+                       ▼
+                 Document[]
 
-This one is particularly important for our actual Phase 1 because your enterprise knowledge will contain things like:
-
-Application inventory
-
-Cluster inventory
-
-Database inventory
-
-Environment mappings
-
-Infrastructure inventory
-
-
-These will likely be Excel spreadsheets.
-
-Goal
-
-Implement:
-
-.xlsx
-  ↓
-ExcelLoader
-  ↓
-Document
-
-For the first version, we'll preserve the sheet name in metadata and convert the spreadsheet rows into text.
+Everything above this line is now working.
 
 
 ---
 
-1. Create excel_loader.py
+Increment 7 — Introduce the Chunk Model
+
+Before writing the actual chunking algorithm, we'll create the object that represents a chunk.
+
+Goal
+
+Convert:
+
+Document
+
+eventually into:
+
+Chunk 1
+Chunk 2
+Chunk 3
+...
+
+But first we need to define what a Chunk looks like.
+
+
+---
+
+Brief reason
+
+A Document is the original source.
+
+A Chunk is a smaller searchable unit derived from that source.
+
+Later, one chunk = one embedding/vector.
+
+We also need to retain the relationship:
+
+Chunk → Original Document → Source File
+
+This will eventually allow the chatbot to say where its answer came from.
+
+
+---
+
+Step 1 — Create chunk.py
 
 Create:
 
 app/
-└── loaders/
-    └── excel_loader.py
+└── models/
+    └── chunk.py
 
-Use:
+Put this inside:
 
-from pathlib import Path
-
-import pandas as pd
-
-from app.loaders.base_loader import BaseLoader
-from app.models.document import Document
+from dataclasses import dataclass, field
+from typing import Dict
+import uuid
 
 
-class ExcelLoader(BaseLoader):
+@dataclass
+class Chunk:
     """
-    Loader for Excel (.xlsx) documents.
+    Represents a searchable chunk derived from a Document.
     """
 
-    def load(self, file_path: Path) -> Document:
-
-        sheets = pd.read_excel(
-            file_path,
-            sheet_name=None
-        )
-
-        sections = []
-
-        for sheet_name, dataframe in sheets.items():
-
-            dataframe = dataframe.fillna("")
-
-            sections.append(
-                f"Sheet: {sheet_name}\n"
-            )
-
-            sections.append(
-                dataframe.to_string(index=False)
-            )
-
-            sections.append("\n")
-
-        content = "\n".join(sections)
-
-        return Document(
-            source=file_path.name,
-            file_type="xlsx",
-            content=content,
-            metadata={
-                "sheets": str(len(sheets))
-            }
-        )
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    document_id: str = ""
+    content: str = ""
+    chunk_index: int = 0
+    metadata: Dict[str, str] = field(default_factory=dict)
 
 
 ---
 
-2. Update loader_factory.py
+Step 2 — Why these fields?
 
-Add:
+For now, only remember the purpose:
 
-from app.loaders.excel_loader import ExcelLoader
+id
 
-and:
+Unique identity of the chunk.
 
-if extension == ".xlsx":
-    return ExcelLoader()
+document_id
 
-Your factory now supports:
+Links the chunk back to the original Document.
 
-.txt   → TxtLoader
-.pdf   → PdfLoader
-.docx  → DocxLoader
-.xlsx  → ExcelLoader
+content
 
+The actual text that will eventually be embedded.
 
----
+chunk_index
 
-3. Create a sample Excel file
+Tells us whether this is chunk 0, 1, 2, etc.
 
-Create:
+metadata
 
-knowledge/sample.xlsx
+Carries information from the original document.
 
 For example:
 
-Application	Namespace	Cluster	Environment
+source = ApplicationInventory.xlsx
+sheet  = Production
 
-Payment API	payment-prod	VKS-PR-01	Production
-Customer API	customer-prod	VKS-PR-02	Production
+or:
 
-
-You can create this using Excel itself.
+source = Runbook.pdf
+page   = 12
 
 
 ---
 
-4. Run the existing scanner
+Step 3 — Verify the model
 
-We don't change KnowledgeScanner.
+Create:
+
+scripts/test_chunk.py
+
+Put:
+
+from app.models.chunk import Chunk
+
+
+chunk = Chunk(
+    document_id="document-123",
+    content="Application: Payment API",
+    chunk_index=0,
+    metadata={
+        "source": "sample.txt"
+    }
+)
+
+print(chunk)
 
 Run:
 
-python -m scripts.test_scanner
+python -m scripts.test_chunk
 
 Expected:
 
-Loaded 6 documents
-
-You should see something similar to:
-
-sample.xlsx
-xlsx
-
-Sheet: Sheet1
-
-Application    Namespace       Cluster      Environment
-Payment API    payment-prod    VKS-PR-01    Production
-Customer API   customer-prod   VKS-PR-02    Production
+Chunk(
+    id='...',
+    document_id='document-123',
+    content='Application: Payment API',
+    chunk_index=0,
+    metadata={'source': 'sample.txt'}
+)
 
 
 ---
 
-Important observation
+Checkpoint
 
-At this point we'll have completed the first version of the entire document ingestion layer:
+At this point we should have:
 
-Knowledge/
-                     │
-          ┌──────────┼──────────┐
-          ▼          ▼          ▼
-         TXT        PDF        DOCX
-          │          │          │
-          └──────────┼──────────┘
-                     ▼
-                 XLSX
-                     │
-                     ▼
-              Loader Factory
-                     │
-                     ▼
-             Document Objects
+Document
+   │
+   │ split later
+   ▼
+Chunk
 
-Once Excel passes, don't add more loaders yet.
+Don't implement the actual splitting algorithm yet.
 
-We'll do one important checkpoint:
+First verify that Chunk imports and instantiates correctly, exactly like we did with Document.
 
-Ingestion Layer Validation
-
-We'll test that:
-
-all four formats load;
-
-unsupported files are ignored;
-
-nested directories work;
-
-metadata is preserved;
-
-malformed files don't crash the entire scan;
-
-the scanner produces a clean collection of Document objects.
-
-
-Then we'll move to the next major subsystem: Chunking.
-
-That is where the raw documents become suitable for embeddings and eventually ChromaDB.
+Once this passes, Increment 8 will be the actual TextChunker, where we'll take a real Document and produce multiple chunks. That's the first step where we'll need to make a decision about chunk size and overlap.
