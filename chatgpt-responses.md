@@ -1,231 +1,123 @@
-Excellent. ✅ Chunk model is verified.
+Perfect. ✅ TextChunker is working correctly.
 
-The output confirms that Chunk is importing and instantiating correctly:
+Your output confirms:
 
-Chunk(
-    id='...',
-    document_id='document-123',
-    content='Application: Payment API',
-    chunk_index=0,
-    metadata={'source': 'sample.txt'}
-)
+Document: sampleText.txt
+Total chunks: 4
 
-So we're ready for the first actual chunking implementation.
+And importantly, all four chunks have the same Document ID:
 
-Increment 8 — Text Chunker
+e35606bb-1bc8-42e1-a42e-51df3d2d3d57
 
-Goal
+while each has a different:
 
-Take one Document and split its content into multiple Chunk objects.
+chunk_index
+
+So our relationship is working:
 
 Document
    │
-   │ split
-   ▼
-┌─────────┐
-│ Chunk 0 │
-├─────────┤
-│ Chunk 1 │
-├─────────┤
-│ Chunk 2 │
-└─────────┘
+   ├── Chunk 0
+   ├── Chunk 1
+   ├── Chunk 2
+   └── Chunk 3
 
-Brief reason
+Current progress
 
-LLMs and embedding models work better when we retrieve relevant portions of a document instead of sending an entire large document every time.
+Document ingestion
+    ├── TXT       ✅
+    ├── PDF       ✅
+    ├── DOCX      ✅
+    └── Excel     ✅
 
-For our first implementation, we'll use character-based chunking. We won't optimize chunk size/overlap yet; we'll make the mechanism work first and tune it later.
+Document → Chunk
+    ├── Chunk model       ✅
+    └── TextChunker       ✅
 
-
----
-
-1. Create the chunker
-
-Create:
-
-app/
-└── chunking/
-    └── text_chunker.py
-
-Use:
-
-from app.models.document import Document
-from app.models.chunk import Chunk
-
-
-class TextChunker:
-    """
-    Splits a Document into smaller text chunks.
-    """
-
-    def __init__(self, chunk_size: int = 500, overlap: int = 50):
-        self.chunk_size = chunk_size
-        self.overlap = overlap
-
-    def chunk(self, document: Document) -> list[Chunk]:
-
-        if not document.content:
-            return []
-
-        chunks = []
-
-        start = 0
-        chunk_index = 0
-
-        while start < len(document.content):
-
-            end = start + self.chunk_size
-
-            chunk_text = document.content[start:end]
-
-            chunks.append(
-                Chunk(
-                    document_id=document.id,
-                    content=chunk_text,
-                    chunk_index=chunk_index,
-                    metadata={
-                        **document.metadata,
-                        "source": document.source,
-                        "file_type": document.file_type
-                    }
-                )
-            )
-
-            chunk_index += 1
-
-            start = end - self.overlap
-
-        return chunks
+Embedding              ⬜
+Vector DB              ⬜
+Retrieval              ⬜
+RAG                    ⬜
+LLM answer generation  ⬜
 
 
 ---
 
-2. Create the test
+One important issue we should fix BEFORE embeddings
 
-Create:
+Look closely at your output:
 
-scripts/test_chunker.py
+Chunk 0:
+Application Name: Payment API
 
-from pathlib import Path
-
-from app.loaders.loader_factory import LoaderFactory
-from app.chunking.text_chunker import TextChunker
-
-
-file_path = Path("knowledge/sample.txt")
-
-loader = LoaderFactory.get_loader(file_path)
-
-document = loader.load(file_path)
-
-chunker = TextChunker(
-    chunk_size=50,
-    overlap=10
-)
-
-chunks = chunker.chunk(document)
-
-print(f"Document: {document.source}")
-print(f"Total chunks: {len(chunks)}")
-
-for chunk in chunks:
-
-    print("\n" + "=" * 50)
-
-    print(f"Chunk index: {chunk.chunk_index}")
-    print(f"Chunk ID: {chunk.id}")
-    print(f"Document ID: {chunk.document_id}")
-    print(f"Content:\n{chunk.content}")
-
-
----
-
-3. Run
-
-From the project root:
-
-python -m scripts.test_chunker
-
-
----
-
-Expected result
-
-You should see something approximately like:
-
-Document: sample.txt
-Total chunks: 4
-
-==================================================
-Chunk index: 0
-Chunk ID: ...
-Document ID: ...
-Content:
-Enterprise AI SDK
-
-Application Name: Payment AP
-
-==================================================
-Chunk index: 1
-Chunk ID: ...
-Document ID: ...
-Content:
+Chunk 1:
 ayment API
-
 Namespace: payment-prod
-...
 
-The exact boundaries will depend on your sample.txt.
+and:
 
-Important thing to check
+Chunk 2:
+Cluster: VKS-PR-01
+Environment: Production
 
-Notice:
+Chunk 3:
+uction
 
-Chunk 0
-     │
-     └── document_id = same Document ID
+This is expected from our character-based 50/10 test, but it exposes an important problem: we're cutting text in the middle of words.
 
-Chunk 1
-     │
-     └── document_id = same Document ID
+For the actual enterprise system, we don't want:
 
-That relationship is intentional.
+Prod
+uction
+
+or:
+
+paym
+ent API
+
+because it can hurt retrieval quality.
+
+But don't change the chunker yet.
+
+We're deliberately doing this incrementally.
+
+The next increment should be a better text splitting strategy rather than immediately moving to embeddings.
 
 
 ---
 
-One thing I want you to observe
+Increment 9 — Sentence/Paragraph-Aware Chunking
 
-We're deliberately using:
+We'll improve our chunker so it tries to preserve natural boundaries:
 
-chunk_size=50
-overlap=10
-
-only for testing.
-
-Do not worry yet about whether 500, 1000, 512, etc. is the "correct" production value.
-
-Later we'll evaluate chunking specifically for your:
-
-PDFs
-
-Excel inventories
-
-SOPs
-
-architecture documents
-
-runbooks
-
-
-and choose a better strategy.
-
-For now, we are validating:
-
-Document
+paragraph
     ↓
-TextChunker
+sentence
     ↓
-List[Chunk]
+word
 
-Once this test passes, we'll have completed the Document → Chunk stage and can move toward the embedding layer.
+instead of blindly cutting:
+
+character 0 → 500
+character 500 → 1000
+
+For our enterprise documents, this is particularly important because we'll have structured content such as:
+
+Application: Payment API
+Namespace: payment-prod
+Cluster: VKS-PR-01
+Environment: Production
+
+We want related information to remain together as much as practical.
+
+First, however, we'll make this change in a controlled way:
+
+We'll create:
+
+app/chunking/text_chunker.py
+
+with a paragraph/line-aware splitter, test it against the same sampleText.txt, and compare the output.
+
+Only once that works will we proceed to embeddings.
+
+This is our last preprocessing improvement before entering the embedding/vector database stage.
