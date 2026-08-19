@@ -1,193 +1,6 @@
-Perfect. ✅ Excel Loader is verified.
+Excellent. ✅ Chunk model is verified.
 
-Your screenshot shows the Excel file being detected and converted into a Document, including the sheet name and tabular content. So our complete initial ingestion layer is now working.
-
-Phase 1 — Current Status
-
-Project Skeleton        ✅
-Document Model          ✅
-Base Loader             ✅
-TXT Loader              ✅
-PDF Loader              ✅
-DOCX Loader             ✅
-Excel Loader            ✅
-Loader Factory          ✅
-Knowledge Scanner       ✅
-
---------------------------------
-DOCUMENT INGESTION COMPLETE
---------------------------------
-
-Chunking Engine         ⬜  ← NEXT
-Embedding Service       ⬜
-ChromaDB                ⬜
-Retrieval               ⬜
-RAG Prompt              ⬜
-Qwen Integration        ⬜
-Enterprise Chatbot      ⬜
-FastAPI                 ⬜
-
-We have now reached an important architectural boundary:
-
-RAW KNOWLEDGE
-                      │
-                      ▼
-              ┌───────────────┐
-              │     Scanner   │
-              └───────┬───────┘
-                      │
-                      ▼
-              ┌───────────────┐
-              │ Loader Factory│
-              └───────┬───────┘
-                      │
-        ┌─────────────┼─────────────┐
-        ▼             ▼             ▼
-       TXT           PDF           DOCX
-                                     
-                      XLSX
-                       │
-                       ▼
-                 Document[]
-
-Everything above this line is now working.
-
-
----
-
-Increment 7 — Introduce the Chunk Model
-
-Before writing the actual chunking algorithm, we'll create the object that represents a chunk.
-
-Goal
-
-Convert:
-
-Document
-
-eventually into:
-
-Chunk 1
-Chunk 2
-Chunk 3
-...
-
-But first we need to define what a Chunk looks like.
-
-
----
-
-Brief reason
-
-A Document is the original source.
-
-A Chunk is a smaller searchable unit derived from that source.
-
-Later, one chunk = one embedding/vector.
-
-We also need to retain the relationship:
-
-Chunk → Original Document → Source File
-
-This will eventually allow the chatbot to say where its answer came from.
-
-
----
-
-Step 1 — Create chunk.py
-
-Create:
-
-app/
-└── models/
-    └── chunk.py
-
-Put this inside:
-
-from dataclasses import dataclass, field
-from typing import Dict
-import uuid
-
-
-@dataclass
-class Chunk:
-    """
-    Represents a searchable chunk derived from a Document.
-    """
-
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    document_id: str = ""
-    content: str = ""
-    chunk_index: int = 0
-    metadata: Dict[str, str] = field(default_factory=dict)
-
-
----
-
-Step 2 — Why these fields?
-
-For now, only remember the purpose:
-
-id
-
-Unique identity of the chunk.
-
-document_id
-
-Links the chunk back to the original Document.
-
-content
-
-The actual text that will eventually be embedded.
-
-chunk_index
-
-Tells us whether this is chunk 0, 1, 2, etc.
-
-metadata
-
-Carries information from the original document.
-
-For example:
-
-source = ApplicationInventory.xlsx
-sheet  = Production
-
-or:
-
-source = Runbook.pdf
-page   = 12
-
-
----
-
-Step 3 — Verify the model
-
-Create:
-
-scripts/test_chunk.py
-
-Put:
-
-from app.models.chunk import Chunk
-
-
-chunk = Chunk(
-    document_id="document-123",
-    content="Application: Payment API",
-    chunk_index=0,
-    metadata={
-        "source": "sample.txt"
-    }
-)
-
-print(chunk)
-
-Run:
-
-python -m scripts.test_chunk
-
-Expected:
+The output confirms that Chunk is importing and instantiating correctly:
 
 Chunk(
     id='...',
@@ -197,21 +10,222 @@ Chunk(
     metadata={'source': 'sample.txt'}
 )
 
+So we're ready for the first actual chunking implementation.
 
----
+Increment 8 — Text Chunker
 
-Checkpoint
+Goal
 
-At this point we should have:
+Take one Document and split its content into multiple Chunk objects.
 
 Document
    │
-   │ split later
+   │ split
    ▼
-Chunk
+┌─────────┐
+│ Chunk 0 │
+├─────────┤
+│ Chunk 1 │
+├─────────┤
+│ Chunk 2 │
+└─────────┘
 
-Don't implement the actual splitting algorithm yet.
+Brief reason
 
-First verify that Chunk imports and instantiates correctly, exactly like we did with Document.
+LLMs and embedding models work better when we retrieve relevant portions of a document instead of sending an entire large document every time.
 
-Once this passes, Increment 8 will be the actual TextChunker, where we'll take a real Document and produce multiple chunks. That's the first step where we'll need to make a decision about chunk size and overlap.
+For our first implementation, we'll use character-based chunking. We won't optimize chunk size/overlap yet; we'll make the mechanism work first and tune it later.
+
+
+---
+
+1. Create the chunker
+
+Create:
+
+app/
+└── chunking/
+    └── text_chunker.py
+
+Use:
+
+from app.models.document import Document
+from app.models.chunk import Chunk
+
+
+class TextChunker:
+    """
+    Splits a Document into smaller text chunks.
+    """
+
+    def __init__(self, chunk_size: int = 500, overlap: int = 50):
+        self.chunk_size = chunk_size
+        self.overlap = overlap
+
+    def chunk(self, document: Document) -> list[Chunk]:
+
+        if not document.content:
+            return []
+
+        chunks = []
+
+        start = 0
+        chunk_index = 0
+
+        while start < len(document.content):
+
+            end = start + self.chunk_size
+
+            chunk_text = document.content[start:end]
+
+            chunks.append(
+                Chunk(
+                    document_id=document.id,
+                    content=chunk_text,
+                    chunk_index=chunk_index,
+                    metadata={
+                        **document.metadata,
+                        "source": document.source,
+                        "file_type": document.file_type
+                    }
+                )
+            )
+
+            chunk_index += 1
+
+            start = end - self.overlap
+
+        return chunks
+
+
+---
+
+2. Create the test
+
+Create:
+
+scripts/test_chunker.py
+
+from pathlib import Path
+
+from app.loaders.loader_factory import LoaderFactory
+from app.chunking.text_chunker import TextChunker
+
+
+file_path = Path("knowledge/sample.txt")
+
+loader = LoaderFactory.get_loader(file_path)
+
+document = loader.load(file_path)
+
+chunker = TextChunker(
+    chunk_size=50,
+    overlap=10
+)
+
+chunks = chunker.chunk(document)
+
+print(f"Document: {document.source}")
+print(f"Total chunks: {len(chunks)}")
+
+for chunk in chunks:
+
+    print("\n" + "=" * 50)
+
+    print(f"Chunk index: {chunk.chunk_index}")
+    print(f"Chunk ID: {chunk.id}")
+    print(f"Document ID: {chunk.document_id}")
+    print(f"Content:\n{chunk.content}")
+
+
+---
+
+3. Run
+
+From the project root:
+
+python -m scripts.test_chunker
+
+
+---
+
+Expected result
+
+You should see something approximately like:
+
+Document: sample.txt
+Total chunks: 4
+
+==================================================
+Chunk index: 0
+Chunk ID: ...
+Document ID: ...
+Content:
+Enterprise AI SDK
+
+Application Name: Payment AP
+
+==================================================
+Chunk index: 1
+Chunk ID: ...
+Document ID: ...
+Content:
+ayment API
+
+Namespace: payment-prod
+...
+
+The exact boundaries will depend on your sample.txt.
+
+Important thing to check
+
+Notice:
+
+Chunk 0
+     │
+     └── document_id = same Document ID
+
+Chunk 1
+     │
+     └── document_id = same Document ID
+
+That relationship is intentional.
+
+
+---
+
+One thing I want you to observe
+
+We're deliberately using:
+
+chunk_size=50
+overlap=10
+
+only for testing.
+
+Do not worry yet about whether 500, 1000, 512, etc. is the "correct" production value.
+
+Later we'll evaluate chunking specifically for your:
+
+PDFs
+
+Excel inventories
+
+SOPs
+
+architecture documents
+
+runbooks
+
+
+and choose a better strategy.
+
+For now, we are validating:
+
+Document
+    ↓
+TextChunker
+    ↓
+List[Chunk]
+
+Once this test passes, we'll have completed the Document → Chunk stage and can move toward the embedding layer.
